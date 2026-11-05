@@ -24,8 +24,18 @@
 
 static const double wgs84_a = 6378137, wgs84_f = 1/298.257223563; /* WGS84 */
 
+static unsigned long checks_run = 0;
+static unsigned long checks_failed = 0;
+
+static int check_result(int passed) {
+  ++checks_run;
+  if (!passed)
+    ++checks_failed;
+  return !passed;
+}
+
 static int checkEquals(double x, double y, double d) {
-  if (fabs(x - y) <= d)
+  if (!check_result(fabs(x - y) <= d))
     return 0;
   printf("checkEquals fails: %.7g != %.7g +/- %.7g\n", x, y, d);
   return 1;
@@ -33,7 +43,7 @@ static int checkEquals(double x, double y, double d) {
 
 static int checkNaN(double x) {
   /* cppcheck-suppress duplicateExpression */
-  if (isnan(x))
+  if (!check_result(isnan(x)))
     return 0;
   printf("checkNaN fails: %.7g\n", x);
   return 1;
@@ -633,8 +643,8 @@ static int GeodSolve73(void) {
               &lat2, &lon2, &azi2);
   result += checkEquals(lat2, 81.04623, 0.5e-5);
   result += checkEquals(lon2, -170, 0.5e-5);
-  result += azi2 == 0 ? 0 : 1;
-  result += 1/azi2 > 0 ? 0 : 1; /* Check that azi2 = +0.0 not -0.0 */
+  result += check_result(azi2 == 0);
+  result += check_result(1/azi2 > 0); /* Check that azi2 = +0.0 not -0.0 */
   return result;
 }
 
@@ -738,9 +748,9 @@ static int GeodSolve80(void) {
   result += checkEquals(M12, 1, 1e-15);
   result += checkEquals(M21, 1, 1e-15);
   result += checkEquals(S12, 0, 1e-10);
-  result += 1/a12 > 0 ? 0 : 1;
-  result += 1/s12 > 0 ? 0 : 1;
-  result += 1/m12 > 0 ? 0 : 1;
+  result += check_result(1/a12 > 0);
+  result += check_result(1/s12 > 0);
+  result += check_result(1/m12 > 0);
 
   a12 = geod_geninverse(&g, 90, 0, 90, 180,
                         &s12, &azi1, &azi2, &m12, &M12, &M21, &S12);
@@ -792,13 +802,13 @@ static int GeodSolve84(void) {
   result += checkNaN(lon2);
   result += checkNaN(azi2);
   geod_direct(&g, 0, inf, 90, 1000, &lat2, &lon2, &azi2);
-  result += lat2 == 0 ? 0 : 1;
+  result += check_result(lat2 == 0);
   result += checkNaN(lon2);
-  result += azi2 == 90 ? 0 : 1;
+  result += check_result(azi2 == 90);
   geod_direct(&g, 0, nan("0"), 90, 1000, &lat2, &lon2, &azi2);
-  result += lat2 == 0 ? 0 : 1;
+  result += check_result(lat2 == 0);
   result += checkNaN(lon2);
-  result += azi2 == 90 ? 0 : 1;
+  result += check_result(azi2 == 90);
   geod_direct(&g, inf, 0, 90, 1000, &lat2, &lon2, &azi2);
   result += checkNaN(lat2);
   result += checkNaN(lon2);
@@ -1065,23 +1075,23 @@ static int Planimeter19(void) {
   geod_init(&g, wgs84_a, wgs84_f);
   geod_polygon_init(&p, 0);
   geod_polygon_compute(&g, &p, 0, 1, &area, &perim);
-  result += area == 0 ? 0 : 1;
-  result += perim == 0 ? 0 : 1;
+  result += check_result(area == 0);
+  result += check_result(perim == 0);
   geod_polygon_testpoint(&g, &p, 1, 1, 0, 1, &area, &perim);
-  result += area == 0 ? 0 : 1;
-  result += perim == 0 ? 0 : 1;
+  result += check_result(area == 0);
+  result += check_result(perim == 0);
   geod_polygon_testedge(&g, &p, 90, 1000, 0, 1, &area, &perim);
   result += checkNaN(area);
   result += checkNaN(perim);
   geod_polygon_addpoint(&g, &p, 1, 1);
   geod_polygon_compute(&g, &p, 0, 1, &area, &perim);
-  result += area == 0 ? 0 : 1;
-  result += perim == 0 ? 0 : 1;
+  result += check_result(area == 0);
+  result += check_result(perim == 0);
   geod_polygon_init(&p, 1);
   geod_polygon_compute(&g, &p, 0, 1, nullptr, &perim);
-  result += perim == 0 ? 0 : 1;
+  result += check_result(perim == 0);
   geod_polygon_testpoint(&g, &p, 1, 1, 0, 1, nullptr, &perim);
-  result += perim == 0 ? 0 : 1;
+  result += check_result(perim == 0);
   geod_polygon_testedge(&g, &p, 90, 1000, 0, 1, nullptr, &perim);
   result += checkNaN(perim);
   geod_polygon_addpoint(&g, &p, 1, 1);
@@ -1212,5 +1222,7 @@ int main(void) {
   if ((i = Planimeter19())) {++n; printf("Planimeter19 fail: %d\n", i);}
   if ((i = Planimeter21())) {++n; printf("Planimeter21 fail: %d\n", i);}
   if ((i = Planimeter29())) {++n; printf("Planimeter29 fail: %d\n", i);}
+  printf("%lu test checks: %lu passed, %lu failed\n",
+         checks_run, checks_run - checks_failed, checks_failed);
   return n;
 }

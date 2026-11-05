@@ -45,14 +45,23 @@ typedef double T;
 
 static const T wgs84_a = 6378137, wgs84_f = 1/298.257223563; /* WGS84 */
 
+static unsigned long checks_run = 0;
+static unsigned long checks_failed = 0;
+
 static int equiv(T x, T y) {
-  return ( (isnan(x) && isnan(y)) || (x == y && signbit(x) == signbit(y)) ) ?
-    0 : 1;
+  ++checks_run;
+  const int failed = !((isnan(x) && isnan(y)) ||
+                       (x == y && signbit(x) == signbit(y)));
+  if (failed)
+    ++checks_failed;
+  return failed;
 }
 
 static int checkEquals(T x, T y, T d) {
+  ++checks_run;
   if (fabs(x - y) <= d)
     return 0;
+  ++checks_failed;
   printf("checkEquals fails: %.7g != %.7g +/- %.7g\n", x, y, d);
   return 1;
 }
@@ -369,6 +378,8 @@ int main(void) {
 
   if (n) {
     printf("%d %s%s\n", n, "failure", (n > 1 ? "s" : ""));
-    return 1;
   }
+  printf("%lu test checks: %lu passed, %lu failed\n", checks_run,
+         checks_run - checks_failed, checks_failed);
+  return n ? 1 : 0;
 }

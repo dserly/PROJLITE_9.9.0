@@ -659,10 +659,48 @@ static int operation(const char *args) {
 
     if (T.P)
         proj_destroy(T.P);
+    T.P = nullptr;
     proj_errno_reset(nullptr);
     proj_context_use_proj4_init_rules(nullptr, T.use_proj4_init_rules);
 
+#ifndef PROJLITE
     T.P = proj_create(nullptr, F->args);
+#else
+    const std::string operationDefinition(F->args);
+    const bool usesAuthorityDatabase =
+        NS_PROJ::internal::ci_find(operationDefinition, "init=epsg:") !=
+            std::string::npos ||
+        NS_PROJ::internal::ci_find(operationDefinition, "init=ignf:") !=
+            std::string::npos ||
+        NS_PROJ::internal::ci_find(operationDefinition, "urn:ogc:def:") !=
+            std::string::npos;
+    const bool usesUnsupportedInputSyntax =
+        operationDefinition.find_first_not_of(" \t\r\n") != std::string::npos &&
+        NS_PROJ::internal::ci_find(operationDefinition, "proj=") ==
+            std::string::npos &&
+        NS_PROJ::internal::ci_find(operationDefinition, "init=") ==
+            std::string::npos;
+    const bool usesSQLiteGeoPackage =
+        NS_PROJ::internal::ci_find(operationDefinition, "proj=tinshift") !=
+            std::string::npos &&
+        NS_PROJ::internal::ci_find(operationDefinition, ".gpkg") !=
+            std::string::npos;
+    if (usesAuthorityDatabase || usesUnsupportedInputSyntax ||
+        usesSQLiteGeoPackage) {
+        if (T.verbosity > 1) {
+            fprintf(stderr,
+                    "PROJLITE: skipping operation requiring %s support\n",
+                    usesSQLiteGeoPackage
+                        ? "SQLite GeoPackage"
+                        : usesAuthorityDatabase
+                            ? "proj.db authority lookup"
+                            : "full user-input parser");
+        }
+        T.skip_test = 1;
+        return 0;
+    }
+    T.P = proj_create(nullptr, F->args);
+#endif
 
     /* Checking that proj_create succeeds is first done at "expect" time, */
     /* since we want to support "expect"ing specific error codes */

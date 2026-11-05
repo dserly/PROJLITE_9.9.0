@@ -141,9 +141,13 @@ proj_add_gie_test("GIGS-5208" "gigs/5208.gie")
 
 add_subdirectory(cli)
 add_subdirectory(unit)
-add_subdirectory(benchmark)
-if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fuzzers")
-  add_subdirectory(fuzzers)
+if(PROJLITE)
+  message(STATUS "Skipping CRS-to-CRS benchmarks and fuzzers for PROJLITE")
+else()
+  add_subdirectory(benchmark)
+  if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fuzzers")
+    add_subdirectory(fuzzers)
+  endif()
 endif()
 
 

@@ -149,6 +149,7 @@ else()
     PROPERTY ENVIRONMENT ${PROJ_TEST_ENVIRONMENT})
 endif()
 
+if(NOT PROJLITE)
 set(PROJ_TEST_CPP_API_SOURCES
   main.cpp
   test_util.cpp
@@ -184,7 +185,11 @@ endif()
 if (USE_ONLY_EMBEDDED_RESOURCE_FILES)
     target_compile_definitions(proj_test_cpp_api PRIVATE USE_ONLY_EMBEDDED_RESOURCE_FILES)
 endif()
+else()
+  message(STATUS "Skipping ISO 19111/SQLite C++ API unit suite for PROJLITE")
+endif()
 
+if(NOT PROJLITE)
 add_executable(gie_self_tests
   main.cpp
   gie_self_tests.cpp)
@@ -198,7 +203,11 @@ set_property(TEST gie_self_tests
 if(TIFF_ENABLED)
   target_compile_definitions(gie_self_tests PRIVATE -DTIFF_ENABLED)
 endif()
+else()
+  message(STATUS "Skipping CRS/ISO 19111 GIE self-tests for PROJLITE")
+endif()
 
+if(NOT PROJLITE)
 add_executable(test_network
   main.cpp
   test_network.cpp)
@@ -214,6 +223,9 @@ if(TIFF_ENABLED)
 add_test(NAME test_network COMMAND test_network)
 set_property(TEST test_network
   PROPERTY ENVIRONMENT ${PROJ_TEST_ENVIRONMENT})
+endif()
+else()
+  message(STATUS "Skipping SQLite-backed network-cache unit tests for PROJLITE")
 endif()
 
 add_executable(test_defmodel
@@ -256,6 +268,7 @@ add_test(NAME test_misc COMMAND test_misc)
 set_property(TEST test_misc
   PROPERTY ENVIRONMENT ${PROJ_TEST_ENVIRONMENT})
 
+if(NOT PROJLITE)
 add_executable(test_tmerczoned
   main.cpp
   test_tmerczoned.cpp)
@@ -265,6 +278,9 @@ target_link_libraries(test_tmerczoned
 add_test(NAME test_tmerczoned COMMAND test_tmerczoned)
 set_property(TEST test_tmerczoned
   PROPERTY ENVIRONMENT ${PROJ_TEST_ENVIRONMENT})
+else()
+  message(STATUS "Skipping CRS-to-CRS tmerczoned tests for PROJLITE")
+endif()
 
 add_executable(test_polyhedral
   main.cpp

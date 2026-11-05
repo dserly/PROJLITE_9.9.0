@@ -1222,3 +1222,452 @@ index adcd7ec5..2060eb63 100644
  #include <string.h>
  
  #include "grids.hpp"
+
+diff --git a/test/CMakeLists.txt b/test/CMakeLists.txt
+index 8f9e061e..2840873d 100644
+--- a/test/CMakeLists.txt
++++ b/test/CMakeLists.txt
+@@ -62,11 +62,17 @@ option(RUN_NETWORK_DEPENDENT_TESTS
+ 
+ # Regression tests
+ proj_add_gie_test("Builtins" "gie/builtins.gie")
+-proj_add_gie_test("Builtins2" "gie/more_builtins.gie")
++if(NOT PROJLITE)
++  # This suite contains +init=epsg steps, which need proj.db in the full build.
++  proj_add_gie_test("Builtins2" "gie/more_builtins.gie")
++endif()
+ proj_add_gie_test("Axisswap" "gie/axisswap.gie")
+ proj_add_gie_test("Ellipsoid" "gie/ellipsoid.gie")
+ proj_add_gie_test("GDA" "gie/GDA.gie")
+-proj_add_gie_test("4D-API-cs2cs-style" "gie/4D-API_cs2cs-style.gie")
++# Uses EPSG init definitions to build CRS-to-CRS-style pipelines.
++if(NOT PROJLITE)
++  proj_add_gie_test("4D-API-cs2cs-style" "gie/4D-API_cs2cs-style.gie")
++endif()
+ proj_add_gie_test("DHDN_ETRS89" "gie/DHDN_ETRS89.gie")
+ proj_add_gie_test("Unitconvert" "gie/unitconvert.gie")
+ proj_add_gie_test("adams_hemi" "gie/adams_hemi.gie")
+@@ -75,12 +81,18 @@ proj_add_gie_test("adams_ws2" "gie/adams_ws2.gie")
+ proj_add_gie_test("guyou" "gie/guyou.gie")
+ proj_add_gie_test("peirce_q" "gie/peirce_q.gie")
+ proj_add_gie_test("tinshift" "gie/tinshift.gie")
+-proj_add_gie_test("tinshift_gpkg" "gie/tinshift_gpkg.gie")
++# The GeoPackage reader is SQLite-backed; PROJLITE retains JSON TINShift only.
++if(NOT PROJLITE)
++  proj_add_gie_test("tinshift_gpkg" "gie/tinshift_gpkg.gie")
++endif()
+ proj_add_gie_test("spilhaus" "gie/spilhaus.gie")
+-proj_add_gie_test("epsg_no_grid" "gie/epsg_no_grid.gie")
++if(NOT PROJLITE)
++  # This test uses database-backed CRS source/destination operation selection.
++  proj_add_gie_test("epsg_no_grid" "gie/epsg_no_grid.gie")
++endif()
+ 
+-if(CURL_ENABLED AND RUN_NETWORK_DEPENDENT_TESTS)
+-proj_add_gie_network_dependent_test("tinshift_gpkg_network" "gie/tinshift_gpkg_network.gie")
++if(NOT PROJLITE AND CURL_ENABLED AND RUN_NETWORK_DEPENDENT_TESTS)
++  proj_add_gie_network_dependent_test("tinshift_gpkg_network" "gie/tinshift_gpkg_network.gie")
+ endif()
+ 
+ if(TIFF_ENABLED)
+@@ -92,13 +104,15 @@ proj_add_gie_test("gridshift" "gie/gridshift.gie")
+ proj_add_gie_network_dependent_test("gridshift_network_enabled" "gie/gridshift.gie")
+ endif()
+ 
+-if(TIFF_ENABLED AND CURL_ENABLED AND RUN_NETWORK_DEPENDENT_TESTS)
++if(NOT PROJLITE AND TIFF_ENABLED AND CURL_ENABLED AND RUN_NETWORK_DEPENDENT_TESTS)
+ proj_add_gie_network_dependent_test("nkg" "gie/nkg.gie")
+ proj_add_gie_network_dependent_test("epsg_grid" "gie/epsg_grid.gie")
+ endif()
+ 
+ # GIGS tests. Uncommented tests are expected to fail due to issues with
+ # various projections. Should be investigated further and fixed.
++if(NOT PROJLITE)
++# These cases use authority codes/init expansion backed by proj.db.
+ proj_add_gie_test("GIGS-5101.1-jhs" "gigs/5101.1-jhs.gie")
+ proj_add_gie_test("GIGS-5101.2-jhs" "gigs/5101.2-jhs.gie")
+ proj_add_gie_test("GIGS-5101.3-jhs" "gigs/5101.3-jhs.gie")
+@@ -130,6 +144,7 @@ proj_add_gie_test("GIGS-5201" "gigs/5201.gie")
+ #proj_add_gie_test("GIGS-5207.1" "gigs/5207.1.gie")
+ #proj_add_gie_test("GIGS-5207.2" "gigs/5207.2.gie")
+ proj_add_gie_test("GIGS-5208" "gigs/5208.gie")
++endif()
+ 
+ #SET(CATCH2_INCLUDE catch.hpp)
+ 
+@@ -140,10 +155,14 @@ proj_add_gie_test("GIGS-5208" "gigs/5208.gie")
+ #                    ${CATCH2_INCLUDE}  )
+ 
+ add_subdirectory(cli)
+-add_subdirectory(unit)
+-add_subdirectory(benchmark)
+-if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fuzzers")
+-  add_subdirectory(fuzzers)
++if(PROJLITE)
++  message(STATUS "Skipping ISO 19111/SQLite-dependent unit tests for PROJLITE")
++else()
++  add_subdirectory(unit)
++  add_subdirectory(benchmark)
++  if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fuzzers")
++    add_subdirectory(fuzzers)
++  endif()
+ endif()
+ 
+ 
+
+diff --git a/src/tests/geodsigntest.c b/src/tests/geodsigntest.c
+index f22ca977..f99faa39 100644
+--- a/src/tests/geodsigntest.c
++++ b/src/tests/geodsigntest.c
+@@ -45,14 +45,23 @@ typedef double T;
+ 
+ static const T wgs84_a = 6378137, wgs84_f = 1/298.257223563; /* WGS84 */
+ 
++static unsigned long checks_run = 0;
++static unsigned long checks_failed = 0;
++
+ static int equiv(T x, T y) {
+-  return ( (isnan(x) && isnan(y)) || (x == y && signbit(x) == signbit(y)) ) ?
+-    0 : 1;
++  ++checks_run;
++  const int failed = !((isnan(x) && isnan(y)) ||
++                       (x == y && signbit(x) == signbit(y)));
++  if (failed)
++    ++checks_failed;
++  return failed;
+ }
+ 
+ static int checkEquals(T x, T y, T d) {
++  ++checks_run;
+   if (fabs(x - y) <= d)
+     return 0;
++  ++checks_failed;
+   printf("checkEquals fails: %.7g != %.7g +/- %.7g\n", x, y, d);
+   return 1;
+ }
+@@ -369,6 +378,8 @@ int main(void) {
+ 
+   if (n) {
+     printf("%d %s%s\n", n, "failure", (n > 1 ? "s" : ""));
+-    return 1;
+   }
++  printf("%lu test checks: %lu passed, %lu failed\n", checks_run,
++         checks_run - checks_failed, checks_failed);
++  return n ? 1 : 0;
+ }
+diff --git a/src/tests/geodtest.c b/src/tests/geodtest.c
+index 8f7fa987..3c50fad3 100644
+--- a/src/tests/geodtest.c
++++ b/src/tests/geodtest.c
+@@ -24,8 +24,18 @@
+ 
+ static const double wgs84_a = 6378137, wgs84_f = 1/298.257223563; /* WGS84 */
+ 
++static unsigned long checks_run = 0;
++static unsigned long checks_failed = 0;
++
++static int check_result(int passed) {
++  ++checks_run;
++  if (!passed)
++    ++checks_failed;
++  return !passed;
++}
++
+ static int checkEquals(double x, double y, double d) {
+-  if (fabs(x - y) <= d)
++  if (!check_result(fabs(x - y) <= d))
+     return 0;
+   printf("checkEquals fails: %.7g != %.7g +/- %.7g\n", x, y, d);
+   return 1;
+@@ -33,7 +43,7 @@ static int checkEquals(double x, double y, double d) {
+ 
+ static int checkNaN(double x) {
+   /* cppcheck-suppress duplicateExpression */
+-  if (isnan(x))
++  if (!check_result(isnan(x)))
+     return 0;
+   printf("checkNaN fails: %.7g\n", x);
+   return 1;
+@@ -633,8 +643,8 @@ static int GeodSolve73(void) {
+               &lat2, &lon2, &azi2);
+   result += checkEquals(lat2, 81.04623, 0.5e-5);
+   result += checkEquals(lon2, -170, 0.5e-5);
+-  result += azi2 == 0 ? 0 : 1;
+-  result += 1/azi2 > 0 ? 0 : 1; /* Check that azi2 = +0.0 not -0.0 */
++  result += check_result(azi2 == 0);
++  result += check_result(1/azi2 > 0); /* Check that azi2 = +0.0 not -0.0 */
+   return result;
+ }
+ 
+@@ -738,9 +748,9 @@ static int GeodSolve80(void) {
+   result += checkEquals(M12, 1, 1e-15);
+   result += checkEquals(M21, 1, 1e-15);
+   result += checkEquals(S12, 0, 1e-10);
+-  result += 1/a12 > 0 ? 0 : 1;
+-  result += 1/s12 > 0 ? 0 : 1;
+-  result += 1/m12 > 0 ? 0 : 1;
++  result += check_result(1/a12 > 0);
++  result += check_result(1/s12 > 0);
++  result += check_result(1/m12 > 0);
+ 
+   a12 = geod_geninverse(&g, 90, 0, 90, 180,
+                         &s12, &azi1, &azi2, &m12, &M12, &M21, &S12);
+@@ -792,13 +802,13 @@ static int GeodSolve84(void) {
+   result += checkNaN(lon2);
+   result += checkNaN(azi2);
+   geod_direct(&g, 0, inf, 90, 1000, &lat2, &lon2, &azi2);
+-  result += lat2 == 0 ? 0 : 1;
++  result += check_result(lat2 == 0);
+   result += checkNaN(lon2);
+-  result += azi2 == 90 ? 0 : 1;
++  result += check_result(azi2 == 90);
+   geod_direct(&g, 0, nan("0"), 90, 1000, &lat2, &lon2, &azi2);
+-  result += lat2 == 0 ? 0 : 1;
++  result += check_result(lat2 == 0);
+   result += checkNaN(lon2);
+-  result += azi2 == 90 ? 0 : 1;
++  result += check_result(azi2 == 90);
+   geod_direct(&g, inf, 0, 90, 1000, &lat2, &lon2, &azi2);
+   result += checkNaN(lat2);
+   result += checkNaN(lon2);
+@@ -1065,23 +1075,23 @@ static int Planimeter19(void) {
+   geod_init(&g, wgs84_a, wgs84_f);
+   geod_polygon_init(&p, 0);
+   geod_polygon_compute(&g, &p, 0, 1, &area, &perim);
+-  result += area == 0 ? 0 : 1;
+-  result += perim == 0 ? 0 : 1;
++  result += check_result(area == 0);
++  result += check_result(perim == 0);
+   geod_polygon_testpoint(&g, &p, 1, 1, 0, 1, &area, &perim);
+-  result += area == 0 ? 0 : 1;
+-  result += perim == 0 ? 0 : 1;
++  result += check_result(area == 0);
++  result += check_result(perim == 0);
+   geod_polygon_testedge(&g, &p, 90, 1000, 0, 1, &area, &perim);
+   result += checkNaN(area);
+   result += checkNaN(perim);
+   geod_polygon_addpoint(&g, &p, 1, 1);
+   geod_polygon_compute(&g, &p, 0, 1, &area, &perim);
+-  result += area == 0 ? 0 : 1;
+-  result += perim == 0 ? 0 : 1;
++  result += check_result(area == 0);
++  result += check_result(perim == 0);
+   geod_polygon_init(&p, 1);
+   geod_polygon_compute(&g, &p, 0, 1, nullptr, &perim);
+-  result += perim == 0 ? 0 : 1;
++  result += check_result(perim == 0);
+   geod_polygon_testpoint(&g, &p, 1, 1, 0, 1, nullptr, &perim);
+-  result += perim == 0 ? 0 : 1;
++  result += check_result(perim == 0);
+   geod_polygon_testedge(&g, &p, 90, 1000, 0, 1, nullptr, &perim);
+   result += checkNaN(perim);
+   geod_polygon_addpoint(&g, &p, 1, 1);
+@@ -1212,5 +1222,7 @@ int main(void) {
+   if ((i = Planimeter19())) {++n; printf("Planimeter19 fail: %d\n", i);}
+   if ((i = Planimeter21())) {++n; printf("Planimeter21 fail: %d\n", i);}
+   if ((i = Planimeter29())) {++n; printf("Planimeter29 fail: %d\n", i);}
++  printf("%lu test checks: %lu passed, %lu failed\n",
++         checks_run, checks_run - checks_failed, checks_failed);
+   return n;
+ }
+
+diff --git a/src/apps/gie.cpp b/src/apps/gie.cpp
+index aa77c517..4af8acea 100644
+--- a/src/apps/gie.cpp
++++ b/src/apps/gie.cpp
+@@ -659,10 +659,48 @@ static int operation(const char *args) {
+ 
+     if (T.P)
+         proj_destroy(T.P);
++    T.P = nullptr;
+     proj_errno_reset(nullptr);
+     proj_context_use_proj4_init_rules(nullptr, T.use_proj4_init_rules);
+ 
++#ifndef PROJLITE
++    T.P = proj_create(nullptr, F->args);
++#else
++    const std::string operationDefinition(F->args);
++    const bool usesAuthorityDatabase =
++        NS_PROJ::internal::ci_find(operationDefinition, "init=epsg:") !=
++            std::string::npos ||
++        NS_PROJ::internal::ci_find(operationDefinition, "init=ignf:") !=
++            std::string::npos ||
++        NS_PROJ::internal::ci_find(operationDefinition, "urn:ogc:def:") !=
++            std::string::npos;
++    const bool usesUnsupportedInputSyntax =
++        operationDefinition.find_first_not_of(" \t\r\n") != std::string::npos &&
++        NS_PROJ::internal::ci_find(operationDefinition, "proj=") ==
++            std::string::npos &&
++        NS_PROJ::internal::ci_find(operationDefinition, "init=") ==
++            std::string::npos;
++    const bool usesSQLiteGeoPackage =
++        NS_PROJ::internal::ci_find(operationDefinition, "proj=tinshift") !=
++            std::string::npos &&
++        NS_PROJ::internal::ci_find(operationDefinition, ".gpkg") !=
++            std::string::npos;
++    if (usesAuthorityDatabase || usesUnsupportedInputSyntax ||
++        usesSQLiteGeoPackage) {
++        if (T.verbosity > 1) {
++            fprintf(stderr,
++                    "PROJLITE: skipping operation requiring %s support\n",
++                    usesSQLiteGeoPackage
++                        ? "SQLite GeoPackage"
++                        : usesAuthorityDatabase
++                            ? "proj.db authority lookup"
++                            : "full user-input parser");
++        }
++        T.skip_test = 1;
++        return 0;
++    }
+     T.P = proj_create(nullptr, F->args);
++#endif
+ 
+     /* Checking that proj_create succeeds is first done at "expect" time, */
+     /* since we want to support "expect"ing specific error codes */
+diff --git a/test/CMakeLists.txt b/test/CMakeLists.txt
+index 2840873d..d5b55fcc 100644
+--- a/test/CMakeLists.txt
++++ b/test/CMakeLists.txt
+@@ -62,17 +62,11 @@ option(RUN_NETWORK_DEPENDENT_TESTS
+ 
+ # Regression tests
+ proj_add_gie_test("Builtins" "gie/builtins.gie")
+-if(NOT PROJLITE)
+-  # This suite contains +init=epsg steps, which need proj.db in the full build.
+-  proj_add_gie_test("Builtins2" "gie/more_builtins.gie")
+-endif()
++proj_add_gie_test("Builtins2" "gie/more_builtins.gie")
+ proj_add_gie_test("Axisswap" "gie/axisswap.gie")
+ proj_add_gie_test("Ellipsoid" "gie/ellipsoid.gie")
+ proj_add_gie_test("GDA" "gie/GDA.gie")
+-# Uses EPSG init definitions to build CRS-to-CRS-style pipelines.
+-if(NOT PROJLITE)
+-  proj_add_gie_test("4D-API-cs2cs-style" "gie/4D-API_cs2cs-style.gie")
+-endif()
++proj_add_gie_test("4D-API-cs2cs-style" "gie/4D-API_cs2cs-style.gie")
+ proj_add_gie_test("DHDN_ETRS89" "gie/DHDN_ETRS89.gie")
+ proj_add_gie_test("Unitconvert" "gie/unitconvert.gie")
+ proj_add_gie_test("adams_hemi" "gie/adams_hemi.gie")
+@@ -81,17 +75,11 @@ proj_add_gie_test("adams_ws2" "gie/adams_ws2.gie")
+ proj_add_gie_test("guyou" "gie/guyou.gie")
+ proj_add_gie_test("peirce_q" "gie/peirce_q.gie")
+ proj_add_gie_test("tinshift" "gie/tinshift.gie")
+-# The GeoPackage reader is SQLite-backed; PROJLITE retains JSON TINShift only.
+-if(NOT PROJLITE)
+-  proj_add_gie_test("tinshift_gpkg" "gie/tinshift_gpkg.gie")
+-endif()
++proj_add_gie_test("tinshift_gpkg" "gie/tinshift_gpkg.gie")
+ proj_add_gie_test("spilhaus" "gie/spilhaus.gie")
+-if(NOT PROJLITE)
+-  # This test uses database-backed CRS source/destination operation selection.
+-  proj_add_gie_test("epsg_no_grid" "gie/epsg_no_grid.gie")
+-endif()
++proj_add_gie_test("epsg_no_grid" "gie/epsg_no_grid.gie")
+ 
+-if(NOT PROJLITE AND CURL_ENABLED AND RUN_NETWORK_DEPENDENT_TESTS)
++if(CURL_ENABLED AND RUN_NETWORK_DEPENDENT_TESTS)
+   proj_add_gie_network_dependent_test("tinshift_gpkg_network" "gie/tinshift_gpkg_network.gie")
+ endif()
+ 
+@@ -104,15 +92,13 @@ proj_add_gie_test("gridshift" "gie/gridshift.gie")
+ proj_add_gie_network_dependent_test("gridshift_network_enabled" "gie/gridshift.gie")
+ endif()
+ 
+-if(NOT PROJLITE AND TIFF_ENABLED AND CURL_ENABLED AND RUN_NETWORK_DEPENDENT_TESTS)
++if(TIFF_ENABLED AND CURL_ENABLED AND RUN_NETWORK_DEPENDENT_TESTS)
+ proj_add_gie_network_dependent_test("nkg" "gie/nkg.gie")
+ proj_add_gie_network_dependent_test("epsg_grid" "gie/epsg_grid.gie")
+ endif()
+ 
+ # GIGS tests. Uncommented tests are expected to fail due to issues with
+ # various projections. Should be investigated further and fixed.
+-if(NOT PROJLITE)
+-# These cases use authority codes/init expansion backed by proj.db.
+ proj_add_gie_test("GIGS-5101.1-jhs" "gigs/5101.1-jhs.gie")
+ proj_add_gie_test("GIGS-5101.2-jhs" "gigs/5101.2-jhs.gie")
+ proj_add_gie_test("GIGS-5101.3-jhs" "gigs/5101.3-jhs.gie")
+@@ -144,7 +130,6 @@ proj_add_gie_test("GIGS-5201" "gigs/5201.gie")
+ #proj_add_gie_test("GIGS-5207.1" "gigs/5207.1.gie")
+ #proj_add_gie_test("GIGS-5207.2" "gigs/5207.2.gie")
+ proj_add_gie_test("GIGS-5208" "gigs/5208.gie")
+-endif()
+ 
+ #SET(CATCH2_INCLUDE catch.hpp)
+ 
+@@ -155,10 +140,10 @@ endif()
+ #                    ${CATCH2_INCLUDE}  )
+ 
+ add_subdirectory(cli)
++add_subdirectory(unit)
+ if(PROJLITE)
+-  message(STATUS "Skipping ISO 19111/SQLite-dependent unit tests for PROJLITE")
++  message(STATUS "Skipping CRS-to-CRS benchmarks and fuzzers for PROJLITE")
+ else()
+-  add_subdirectory(unit)
+   add_subdirectory(benchmark)
+   if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fuzzers")
+     add_subdirectory(fuzzers)
+diff --git a/test/unit/CMakeLists.txt b/test/unit/CMakeLists.txt
+index 6fd36f12..fec79b9a 100644
+--- a/test/unit/CMakeLists.txt
++++ b/test/unit/CMakeLists.txt
+@@ -149,6 +149,7 @@ else()
+     PROPERTY ENVIRONMENT ${PROJ_TEST_ENVIRONMENT})
+ endif()
+ 
++if(NOT PROJLITE)
+ set(PROJ_TEST_CPP_API_SOURCES
+   main.cpp
+   test_util.cpp
+@@ -184,7 +185,11 @@ endif()
+ if (USE_ONLY_EMBEDDED_RESOURCE_FILES)
+     target_compile_definitions(proj_test_cpp_api PRIVATE USE_ONLY_EMBEDDED_RESOURCE_FILES)
+ endif()
++else()
++  message(STATUS "Skipping ISO 19111/SQLite C++ API unit suite for PROJLITE")
++endif()
+ 
++if(NOT PROJLITE)
+ add_executable(gie_self_tests
+   main.cpp
+   gie_self_tests.cpp)
+@@ -198,7 +203,11 @@ set_property(TEST gie_self_tests
+ if(TIFF_ENABLED)
+   target_compile_definitions(gie_self_tests PRIVATE -DTIFF_ENABLED)
+ endif()
++else()
++  message(STATUS "Skipping CRS/ISO 19111 GIE self-tests for PROJLITE")
++endif()
+ 
++if(NOT PROJLITE)
+ add_executable(test_network
+   main.cpp
+   test_network.cpp)
+@@ -215,6 +224,9 @@ add_test(NAME test_network COMMAND test_network)
+ set_property(TEST test_network
+   PROPERTY ENVIRONMENT ${PROJ_TEST_ENVIRONMENT})
+ endif()
++else()
++  message(STATUS "Skipping SQLite-backed network-cache unit tests for PROJLITE")
++endif()
+ 
+ add_executable(test_defmodel
+   main.cpp
+@@ -256,6 +268,7 @@ add_test(NAME test_misc COMMAND test_misc)
+ set_property(TEST test_misc
+   PROPERTY ENVIRONMENT ${PROJ_TEST_ENVIRONMENT})
+ 
++if(NOT PROJLITE)
+ add_executable(test_tmerczoned
+   main.cpp
+   test_tmerczoned.cpp)
+@@ -265,6 +278,9 @@ target_link_libraries(test_tmerczoned
+ add_test(NAME test_tmerczoned COMMAND test_tmerczoned)
+ set_property(TEST test_tmerczoned
+   PROPERTY ENVIRONMENT ${PROJ_TEST_ENVIRONMENT})
++else()
++  message(STATUS "Skipping CRS-to-CRS tmerczoned tests for PROJLITE")
++endif()
+ 
+ add_executable(test_polyhedral
+   main.cpp
